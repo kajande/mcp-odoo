@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     procps \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy source code
@@ -33,5 +34,5 @@ RUN chmod +x run_server.py
 # Set stdout/stderr to unbuffered mode
 ENV PYTHONUNBUFFERED=1
 
-# Run the custom MCP server script instead of the module
-ENTRYPOINT ["python", "run_server.py"] 
+# Change to use CMD instead of ENTRYPOINT
+CMD ["python", "-u", "run_server.py"]
