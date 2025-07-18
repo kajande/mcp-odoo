@@ -20,6 +20,9 @@ except ImportError:
     LANGGRAPH_AVAILABLE = False
     AsyncPostgresSaver = None
 
+PG_URI_PROD = 'postgresql://postgres.japcfankaqxrwyjzydsy:"ciyrF86sP9gH&-J"@aws-0-eu-central-1.pooler.supabase.com:5432/postgres'
+PG_URI_DEV = "postgresql://odoo:odoo@db:5432/odoo"
+
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, Field
 
@@ -53,7 +56,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     if LANGGRAPH_AVAILABLE:
         try:
             # Get PostgreSQL connection string from environment
-            PG_URI = os.getenv("PG_URI", "postgresql://odoo:odoo@db:5432/odoo")
+            PG_URI = os.getenv("PG_URI", PG_URI_PROD)
             
             logger.info("Initializing PostgreSQL checkpoint saver...")
             logger.info(f"Using PostgreSQL URI: {PG_URI}")
