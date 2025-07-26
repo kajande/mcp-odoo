@@ -56,7 +56,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     if LANGGRAPH_AVAILABLE:
         try:
             # Get PostgreSQL connection string from environment
-            PG_URI = os.getenv("PG_URI", PG_URI_PROD)
+            PG_URI = os.getenv("PG_URI", PG_URI_DEV)
             
             logger.info("Initializing PostgreSQL checkpoint saver...")
             logger.info(f"Using PostgreSQL URI: {PG_URI}")

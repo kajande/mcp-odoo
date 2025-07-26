@@ -427,6 +427,8 @@ def get_odoo_client():
     print(f"  Timeout: {timeout}s", file=os.sys.stderr)
     print(f"  Verify SSL: {verify_ssl}", file=os.sys.stderr)
 
+    # import ipdb;ipdb.set_trace()
+
     return OdooClient(
         url=config["url"],
         db=config["db"],
