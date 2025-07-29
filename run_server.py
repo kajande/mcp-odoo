@@ -16,6 +16,11 @@ import mcp.types as types
 
 from odoo_mcp.server import mcp  # FastMCP instance from our code
 
+# Safe import for langgraph with fallback
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+PG_URI_PROD = 'postgresql://postgres.japcfankaqxrwyjzydsy:"ciyrF86sP9gH&-J"@aws-0-eu-central-1.pooler.supabase.com:5432/postgres'
+PG_URI_DEV = "postgresql://odoo:odoo@db:5432/odoo"
 
 def setup_logging():
     """Set up logging to both console and file"""
@@ -67,8 +72,30 @@ def main(transport='streamable-http') -> int:
                     logger.info(f"  {key}: {value}")
         
         logger.info(f"MCP object type: {type(mcp)}")
+
+        async def asetup_checkpointer():
+            # Initialize PostgreSQL checkpoint saver if available
+            saver = None
+            try:
+                # Get PostgreSQL connection string from environment
+                PG_URI = os.getenv("PG_URI", PG_URI_DEV)
+                
+                logger.info("Initializing PostgreSQL checkpoint saver...")
+                logger.info(f"Using PostgreSQL URI: {PG_URI}")
+                
+                # Use context manager as in the working example
+                async with AsyncPostgresSaver.from_conn_string(PG_URI) as saver:
+                    await saver.setup()
+                    logger.info("PostgreSQL checkpoint saver initialized successfully")
+
+                logger.info("PostgreSQL checkpoint saver cleaned up")
+                return
+            except Exception as e:
+                logger.error(f"Error initializing PostgreSQL saver: {str(e)}")
+
         
         if transport == 'streamable-http':
+            asyncio.run(asetup_checkpointer())
             mcp.run(transport='streamable-http')
             logger.info("MCP server stopped normally")
             return 0

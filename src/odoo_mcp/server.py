@@ -11,18 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast
 
-# Safe import for langgraph with fallback
-try:
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    LANGGRAPH_AVAILABLE = True
-except ImportError:
-    LANGGRAPH_AVAILABLE = False
-    AsyncPostgresSaver = None
-
-LANGGRAPH_AVAILABLE = False
-PG_URI_PROD = 'postgresql://postgres.japcfankaqxrwyjzydsy:"ciyrF86sP9gH&-J"@aws-0-eu-central-1.pooler.supabase.com:5432/postgres'
-PG_URI_DEV = "postgresql://odoo:odoo@db:5432/odoo"
-
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, Field
 
@@ -40,7 +28,6 @@ logger.addHandler(handler)
 class AppContext:
     """Application context for the MCP server"""
     odoo: OdooClient
-    saver: Optional[AsyncPostgresSaver] = None
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
@@ -49,35 +36,9 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """
     # Initialize Odoo client on startup
     odoo_client = get_odoo_client()
-    
-    # Initialize PostgreSQL checkpoint saver if available
-    saver = None
-    if LANGGRAPH_AVAILABLE:
-        try:
-            # Get PostgreSQL connection string from environment
-            PG_URI = os.getenv("PG_URI", PG_URI_DEV)
-            
-            logger.info("Initializing PostgreSQL checkpoint saver...")
-            logger.info(f"Using PostgreSQL URI: {PG_URI}")
-            
-            # Use context manager as in the working example
-            async with AsyncPostgresSaver.from_conn_string(PG_URI) as saver:
-                await saver.setup()
-                logger.info("PostgreSQL checkpoint saver initialized successfully")
 
-                # Yield the context with both odoo client and saver
-                yield AppContext(odoo=odoo_client, saver=saver)
-
-            logger.info("PostgreSQL checkpoint saver cleaned up")
-            return
-        except Exception as e:
-            logger.error(f"Error initializing PostgreSQL saver: {str(e)}")
-    else:
-        logger.warning("langgraph package not available. PostgreSQL checkpointing disabled")
-
-    # Fallback without saver if langgraph not available or initialization failed
     try:
-        yield AppContext(odoo=odoo_client, saver=None)
+        yield AppContext(odoo=odoo_client)
     finally:
         # No cleanup needed for Odoo client
         pass
