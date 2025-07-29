@@ -49,7 +49,7 @@ def setup_logging():
     return logger
 
 
-def main() -> int:
+def main(transport='streamable-http') -> int:
     """
     Run the MCP server based on the official examples
     """
@@ -68,6 +68,10 @@ def main() -> int:
         
         logger.info(f"MCP object type: {type(mcp)}")
         
+        if transport == 'streamable-http':
+            mcp.run(transport='streamable-http')
+            logger.info("MCP server stopped normally")
+            return 0
         # Run server in stdio mode like the official examples
         async def arun():
             logger.info("Starting Odoo MCP server with stdio transport...")
@@ -88,4 +92,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main()) 
+    sys.exit(main())

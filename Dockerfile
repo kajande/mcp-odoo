@@ -20,6 +20,9 @@ RUN mkdir -p /app/logs && chmod 777 /app/logs
 RUN pip install --no-cache-dir "mcp[cli]" && \
     pip install --no-cache-dir -e .
 
+# Expose port 8000 for streamable‑HTTP MCP server
+EXPOSE 8000
+
 # Set environment variables (can be overridden at runtime)
 ENV ODOO_URL=""
 ENV ODOO_DB=""
@@ -28,6 +31,8 @@ ENV ODOO_PASSWORD=""
 ENV ODOO_TIMEOUT="30"
 ENV ODOO_VERIFY_SSL="1"
 ENV DEBUG="0"
+# Add MCP transport configuration
+ENV MCP_TRANSPORT="streamable-http"
 
 # Make run_server.py executable
 RUN chmod +x run_server.py

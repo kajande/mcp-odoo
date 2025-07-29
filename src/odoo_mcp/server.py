@@ -1,6 +1,5 @@
 """
 MCP server for Odoo integration
-
 Provides MCP tools and resources for interacting with Odoo ERP systems
 """
 
@@ -20,6 +19,7 @@ except ImportError:
     LANGGRAPH_AVAILABLE = False
     AsyncPostgresSaver = None
 
+LANGGRAPH_AVAILABLE = False
 PG_URI_PROD = 'postgresql://postgres.japcfankaqxrwyjzydsy:"ciyrF86sP9gH&-J"@aws-0-eu-central-1.pooler.supabase.com:5432/postgres'
 PG_URI_DEV = "postgresql://odoo:odoo@db:5432/odoo"
 
@@ -41,7 +41,6 @@ class AppContext:
     """Application context for the MCP server"""
     odoo: OdooClient
     saver: Optional[AsyncPostgresSaver] = None
-
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
@@ -83,13 +82,25 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
         # No cleanup needed for Odoo client
         pass
 
+# Determine transport configuration
+transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
+stateless_http = transport == "streamable-http"
+host = "0.0.0.0" if stateless_http else "127.0.0.1"
+port = 8000 if stateless_http else None
 
-# Create MCP server
+logger.info(f"Creating FastMCP with transport: {transport}")
+logger.info(f"HTTP server will bind to: {host}:{port}")
+
+# Create MCP server with transport configuration
 mcp = FastMCP(
     "Odoo MCP Server",
     description="MCP Server for interacting with Odoo ERP systems",
     dependencies=["requests"],
     lifespan=app_lifespan,
+    transport=transport,
+    host=host,
+    port=port,
+    stateless_http=stateless_http
 )
 
 
@@ -488,3 +499,4 @@ def search_holidays(
 
     except Exception as e:
         return SearchHolidaysResponse(success=False, error=str(e))
+
