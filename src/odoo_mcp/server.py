@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast
 
 from mcp.server.fastmcp import Context, FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .odoo_client import OdooClient, get_odoo_client
@@ -66,6 +68,10 @@ mcp = FastMCP(
 
 
 # ----- MCP Resources -----
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request):
+    return JSONResponse({"status": "healthy"})
 
 
 @mcp.resource(
