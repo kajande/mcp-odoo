@@ -57,10 +57,8 @@ logger.info(f"HTTP server will bind to: {host}:{port}")
 # Create MCP server with transport configuration
 mcp = FastMCP(
     "Odoo MCP Server",
-    description="MCP Server for interacting with Odoo ERP systems",
     dependencies=["requests"],
     lifespan=app_lifespan,
-    transport=transport,
     host=host,
     port=port,
     stateless_http=stateless_http
