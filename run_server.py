@@ -19,8 +19,17 @@ from odoo_mcp.server import mcp  # FastMCP instance from our code
 # Safe import for langgraph with fallback
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-PG_URI_PROD = 'postgresql://postgres.japcfankaqxrwyjzydsy:"ciyrF86sP9gH&-J"@aws-0-eu-central-1.pooler.supabase.com:5432/postgres'
-PG_URI_DEV = "postgresql://odoo:odoo@db:5432/odoo"
+from dotenv import load_dotenv
+
+_ = load_dotenv()
+
+
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_NAME = os.getenv("DB_NAME")
+DB_PORT = os.getenv("DB_PORT")
+PG_URI=f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 def setup_logging():
     """Set up logging to both console and file"""
@@ -78,8 +87,6 @@ def main(transport='streamable-http') -> int:
             saver = None
             try:
                 # Get PostgreSQL connection string from environment
-                PG_URI = os.getenv("PG_URI", PG_URI_DEV)
-                
                 logger.info("Initializing PostgreSQL checkpoint saver...")
                 logger.info(f"Using PostgreSQL URI: {PG_URI}")
                 
