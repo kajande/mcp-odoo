@@ -26,6 +26,8 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
+from .prompts import EXECUTE_METHOD_DESCRIPTION
+
 @dataclass
 class AppContext:
     """Application context for the MCP server"""
@@ -233,7 +235,7 @@ class SearchHolidaysResponse(BaseModel):
 # ----- MCP Tools -----
 
 
-@mcp.tool(description="Execute a custom method on an Odoo model")
+@mcp.tool(description=EXECUTE_METHOD_DESCRIPTION)
 def execute_method(
     ctx: Context,
     model: str,
