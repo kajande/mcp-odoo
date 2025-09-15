@@ -1,6 +1,7 @@
 """
 Command line entry point for the Odoo MCP Server
 """
+
 import sys
 import asyncio
 import traceback
@@ -23,17 +24,17 @@ def main() -> int:
                     print(f"  {key}: ***hidden***", file=sys.stderr)
                 else:
                     print(f"  {key}: {value}", file=sys.stderr)
-        
+
         # Check if server instance has the run_stdio method
-        methods = [method for method in dir(mcp) if not method.startswith('_')]
+        methods = [method for method in dir(mcp) if not method.startswith("_")]
         print(f"Available methods on mcp object: {methods}", file=sys.stderr)
-        
+
         print("Starting MCP server with run() method...", file=sys.stderr)
         sys.stderr.flush()  # Ensure log information is written immediately
-        
+
         # Use the run() method directly
         mcp.run()
-        
+
         # If execution reaches here, the server exited normally
         print("MCP server stopped normally", file=sys.stderr)
         return 0

@@ -22,16 +22,19 @@ from .odoo_client import OdooClient, get_odoo_client
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
 from .prompts import EXECUTE_METHOD_DESCRIPTION
 
+
 @dataclass
 class AppContext:
     """Application context for the MCP server"""
+
     odoo: OdooClient
+
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
@@ -46,6 +49,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     finally:
         # No cleanup needed for Odoo client
         pass
+
 
 # Determine transport configuration
 transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
@@ -63,11 +67,12 @@ mcp = FastMCP(
     lifespan=app_lifespan,
     host=host,
     port=port,
-    stateless_http=stateless_http
+    stateless_http=stateless_http,
 )
 
 
 # ----- MCP Resources -----
+
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request):
@@ -466,4 +471,3 @@ def search_holidays(
 
     except Exception as e:
         return SearchHolidaysResponse(success=False, error=str(e))
-
