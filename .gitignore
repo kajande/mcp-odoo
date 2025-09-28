@@ -1,3 +1,13 @@
+terraform2
+ansible2
+terraform.txt
+ansible.txt
+workflows.txt
+project.txt
+uv.lock
+mcp-odoo.txt
+TODO
+
 # Python bytecode
 __pycache__/
 *.py[cod]

@@ -1,0 +1,130 @@
+name: Destroy MCP-Odoo Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+      action:
+        description: 'Terraform action'
+        required: true
+        default: 'destroy'
+        type: choice
+        options:
+          - destroy
+
+jobs:
+  destroy:
+    name: Destroy MCP-Odoo Infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Setup Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          environment: ${{ inputs.environment }}
+          tf-api-token: ${{ secrets.TF_API_TOKEN }}
+          do-token: ${{ secrets.DO_TOKEN }}
+          namecom-username: ${{ vars.NAMECOM_USERNAME }}
+          namecom-token: ${{ secrets.NAMECOM_TOKEN }}
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+        run: terraform init
+
+      - name: Clean up orphaned resources from state before destroy
+        working-directory: ./terraform
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+        run: |
+          echo "=== Checking for orphaned reserved IP resources before destroy ==="
+          
+          # Get all reserved IP resources from state
+          RESERVED_IP_RESOURCES=$(terraform state list | grep reserved_ip || echo "")
+          
+          if [ -n "$RESERVED_IP_RESOURCES" ]; then
+            echo "Found reserved IP resources in state:"
+            echo "$RESERVED_IP_RESOURCES"
+            
+            # Check each one against DigitalOcean API
+            echo "$RESERVED_IP_RESOURCES" | while read resource; do
+              if [ -n "$resource" ]; then
+                echo "Checking resource: $resource"
+                
+                # Get the IP from the state
+                IP=$(terraform state show "$resource" 2>/dev/null | grep -E "ip_address.*=" | head -1 | sed 's/.*= "\([^"]*\)".*/\1/' || echo "")
+                
+                if [ -n "$IP" ]; then
+                  echo "Found IP $IP in resource $resource"
+                  
+                  # Check if it exists in DigitalOcean
+                  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                    -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+                    "https://api.digitalocean.com/v2/reserved_ips/$IP")
+                  
+                  if [ "$HTTP_CODE" = "404" ]; then
+                    echo "❌ IP $IP not found in DigitalOcean - removing from state"
+                    terraform state rm "$resource" || echo "Failed to remove $resource"
+                  else
+                    echo "✅ IP $IP exists in DigitalOcean"
+                  fi
+                fi
+              fi
+            done
+          else
+            echo "No reserved IP resources found in state"
+          fi
+
+      - name: Terraform Destroy
+        working-directory: ./terraform
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+        run: terraform destroy -auto-approve
+
+      - name: Clean up DNS records
+        if: always()
+        run: |
+          case "${{ inputs.environment }}" in
+            "production")
+              HOST_NAME="mcp"
+              ;;
+            "staging")
+              HOST_NAME="mcp-staging"
+              ;;
+            "dev")
+              HOST_NAME="mcp-dev"
+              ;;
+          esac
+          
+          echo "Cleaning up DNS record for: $HOST_NAME"
+          
+          curl -s -u "${{ vars.NAMECOM_USERNAME }}:${{ secrets.NAMECOM_TOKEN }}" \
+            "https://api.name.com/v4/domains/kajande.com/records" | \
+            jq -r '.records[] | select(.host=="'$HOST_NAME'" and .type=="A") | .id' | \
+            while read record_id; do
+              echo "Deleting DNS record $record_id"
+              curl -X DELETE \
+                -u "${{ vars.NAMECOM_USERNAME }}:${{ secrets.NAMECOM_TOKEN }}" \
+                "https://api.name.com/v4/domains/kajande.com/records/$record_id"
+            done
+
+      - name: Cleanup sensitive files
+        if: always()
+        run: |
+          rm -f terraform/terraform.auto.tfvars

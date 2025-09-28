@@ -1,0 +1,60 @@
+name: 'DigitalOcean Utilities'
+description: 'Common DigitalOcean operations'
+
+inputs:
+  environment:
+    description: 'Environment name'
+    required: true
+  action:
+    description: 'Action to perform'
+    required: true
+    default: 'get-droplet-ip'
+  do-token:
+    description: 'DigitalOcean token'
+    required: true
+  tags:
+    description: 'Tags to filter droplets by'
+    required: false
+    default: 'mcp'
+
+outputs:
+  ip:
+    description: 'Droplet IP address'
+    value: ${{ steps.get-ip.outputs.ip }}
+  has-ip:
+    description: 'Whether droplet IP was found'
+    value: ${{ steps.get-ip.outputs.has-ip }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get Droplet IP
+      if: inputs.action == 'get-droplet-ip'
+      id: get-ip
+      shell: bash
+      run: |
+        clean_ip=$(doctl -t ${{ inputs.do-token }} compute droplet list --format "Name,PublicIPv4,Tags" --no-header | \
+          grep "${{ inputs.tags }}" | grep "${{ inputs.environment }}" | awk '{print $2}' | head -n1)
+        
+        if [ -z "$clean_ip" ]; then
+          echo "::warning::No active droplets found with tags '${{ inputs.tags }}' and '${{ inputs.environment }}'"
+          echo "ip=" >> $GITHUB_OUTPUT
+          echo "has-ip=false" >> $GITHUB_OUTPUT
+        else
+          echo "ip=$clean_ip" >> $GITHUB_OUTPUT
+          echo "has-ip=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Generate Inventory
+      if: inputs.action == 'generate-inventory' && steps.get-ip.outputs.has-ip == 'true'
+      shell: bash
+      run: |
+        mkdir -p ansible/inventories/${{ inputs.environment }}
+        cat > ansible/inventories/${{ inputs.environment }}/hosts << EOF
+        [mcp]
+        ${{ steps.get-ip.outputs.ip }} ansible_user=root
+
+        [mcp:vars]
+        ansible_user=root
+        env=${{ inputs.environment }}
+        EOF

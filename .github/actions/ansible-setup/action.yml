@@ -1,0 +1,39 @@
+name: 'Ansible Setup'
+description: 'Setup Ansible with common configuration'
+
+inputs:
+  environment:
+    description: 'Environment name'
+    required: true
+  git-token:
+    description: 'Git token for repository access'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install Ansible + Collections and Roles
+      shell: bash
+      run: |
+        pip install ansible
+        # Install collections
+        ansible-galaxy collection install -r ansible/requirements.yml
+        # Install roles to the path specified in ansible.cfg
+        ansible-galaxy role install -r ansible/requirements.yml -p ansible/playbooks/roles
+        
+        # Verify the role was installed
+        echo "=== Checking installed roles ==="
+        ls -la ansible/playbooks/roles/
+        echo "=== Checking for geerlingguy.docker role ==="
+        ls -la ansible/playbooks/roles/geerlingguy.docker/ || echo "Role not found"
+
+    - name: Install doctl
+      shell: bash
+      run: |
+        curl -sL https://github.com/digitalocean/doctl/releases/download/v1.104.0/doctl-1.104.0-linux-amd64.tar.gz | tar -xzv
+        sudo mv doctl /usr/local/bin

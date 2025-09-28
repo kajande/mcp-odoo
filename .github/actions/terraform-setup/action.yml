@@ -1,0 +1,64 @@
+name: 'Terraform Setup'
+description: 'Setup Terraform with common configuration'
+
+inputs:
+  environment:
+    description: 'Environment name'
+    required: true
+  terraform-version:
+    description: 'Terraform version'
+    required: false
+    default: '1.12.2'
+  tf-api-token:
+    description: 'Terraform API token'
+    required: true
+  do-token:
+    description: 'DigitalOcean token'
+    required: true
+  namecom-username:
+    description: 'Name.com username'
+    required: true
+  namecom-token:
+    description: 'Name.com token'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        cli_config_credentials_token: ${{ inputs.tf-api-token }}
+
+    - name: Validate DigitalOcean Token
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.do-token }}" ]; then
+          echo "❌ DO_TOKEN secret is missing or empty"
+          exit 1
+        fi
+        
+        response=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ inputs.do-token }}" \
+          "https://api.digitalocean.com/v2/account")
+        
+        if [ "$response" != "200" ]; then
+          echo "❌ DigitalOcean token is invalid (HTTP $response)"
+          exit 1
+        fi
+        
+        echo "✅ DigitalOcean token is valid"
+
+    - name: Generate terraform variables file
+      shell: bash
+      run: |
+        # Create the variables file in the terraform root directory so it gets auto-loaded
+        cat > terraform/terraform.auto.tfvars << EOF
+        environment = "${{ inputs.environment }}"
+        domain_name = "kajande.com"
+        do_token = "${{ inputs.do-token }}"
+        namecom_username = "${{ inputs.namecom-username }}"
+        namecom_token = "${{ inputs.namecom-token }}"
+        EOF
+        
+        echo "✅ Generated terraform.auto.tfvars in terraform/ directory"

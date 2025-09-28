@@ -197,46 +197,6 @@ class SearchDomain(BaseModel):
         return [condition.to_tuple() for condition in self.conditions]
 
 
-class EmployeeSearchResult(BaseModel):
-    """Represents a single employee search result."""
-
-    id: int = Field(description="Employee ID")
-    name: str = Field(description="Employee name")
-
-
-class SearchEmployeeResponse(BaseModel):
-    """Response model for the search_employee tool."""
-
-    success: bool = Field(description="Indicates if the search was successful")
-    result: Optional[List[EmployeeSearchResult]] = Field(
-        default=None, description="List of employee search results"
-    )
-    error: Optional[str] = Field(default=None, description="Error message, if any")
-
-
-class Holiday(BaseModel):
-    """Represents a single holiday."""
-
-    display_name: str = Field(description="Display name of the holiday")
-    start_datetime: str = Field(description="Start date and time of the holiday")
-    stop_datetime: str = Field(description="End date and time of the holiday")
-    employee_id: List[Union[int, str]] = Field(
-        description="Employee ID associated with the holiday"
-    )
-    name: str = Field(description="Name of the holiday")
-    state: str = Field(description="State of the holiday")
-
-
-class SearchHolidaysResponse(BaseModel):
-    """Response model for the search_holidays tool."""
-
-    success: bool = Field(description="Indicates if the search was successful")
-    result: Optional[List[Holiday]] = Field(
-        default=None, description="List of holidays found"
-    )
-    error: Optional[str] = Field(default=None, description="Error message, if any")
-
-
 # ----- MCP Tools -----
 
 
