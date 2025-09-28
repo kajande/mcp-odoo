@@ -1,0 +1,126 @@
+name: Update MCP-Odoo Deployment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: string
+    secrets:
+      SSH_PRIVATE_KEY:
+        required: true
+      GIT_TOKEN:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+      DB_PASSWORD:
+        required: true
+      PGPASSWORD:
+        required: true
+      ODOO_PASSWORD:
+        required: true
+      DO_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - production
+          - staging
+          - dev
+
+jobs:
+  update:
+    name: Update MCP-Odoo Application
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Setup Ansible
+        uses: ./.github/actions/ansible-setup
+        with:
+          environment: ${{ inputs.environment }}
+          git-token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Get Droplet IP
+        uses: ./.github/actions/digitalocean
+        with:
+          environment: ${{ inputs.environment }}
+          action: 'get-droplet-ip'
+          do-token: ${{ secrets.DO_TOKEN }}
+          tags: "mcp-odoo,${{ inputs.environment }}"
+        id: droplet-info
+
+      - name: Check if inventory has valid IP
+        id: check-inventory
+        run: |
+          if [ "${{ steps.droplet-info.outputs.has-ip }}" = "true" ]; then
+            echo "has-ip=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-ip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup SSH
+        if: steps.check-inventory.outputs.has-ip == 'true'
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Generate Inventory
+        if: steps.check-inventory.outputs.has-ip == 'true'
+        run: |
+          mkdir -p ansible/inventories/${{ inputs.environment }}
+          cat > ansible/inventories/${{ inputs.environment }}/hosts << EOF
+          [mcp-odoo]
+          ${{ steps.droplet-info.outputs.ip }} ansible_user=root
+
+          [mcp-odoo:vars]
+          ansible_user=root
+          env=${{ inputs.environment }}
+          EOF
+
+      - name: Run Update Playbook
+        if: steps.check-inventory.outputs.has-ip == 'true'
+        working-directory: ./ansible
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          GIT_USER: ${{ vars.GIT_USER }}
+          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DB_HOST: ${{ vars.DB_HOST }}
+          DB_PORT: ${{ vars.DB_PORT }}
+          DB_USER: ${{ vars.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          ODOO_DB: ${{ vars.ODOO_DB }}
+          ODOO_USERNAME: ${{ vars.ODOO_USERNAME }}
+          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          ANSIBLE_DISPLAY_SKIPPED_HOSTS: false
+        run: |
+          ANSIBLE_FORCE_COLOR=1 ansible-playbook \
+            -i inventories/${{ inputs.environment }}/hosts \
+            playbooks/update-mcp.yml \
+            --extra-vars "ansible_ssh_retries=5 ansible_ssh_timeout=30 github_token=$GIT_TOKEN github_user=${{ vars.GIT_USER }} openai_api_key=$OPENAI_API_KEY"
+
+      - name: Show container logs on failure
+        if: ${{ failure() && steps.check-inventory.outputs.has-ip == 'true' }}
+        run: |
+          ip="${{ steps.droplet-info.outputs.ip }}"
+          ssh -o StrictHostKeyChecking=no root@$ip "cd /home/mcp-odoo/${{ inputs.environment }} && docker-compose logs"
+
+      - name: Skip deployment if no droplet
+        if: steps.check-inventory.outputs.has-ip == 'false'
+        run: |
+          echo "Skipping deployment - no ${{ inputs.environment }} droplet found for MCP-Odoo. Run the Configure Deployment workflow first."

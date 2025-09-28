@@ -1,0 +1,8 @@
+[submodule "terraform"]
+	path = terraform
+	url = https://github.com/kajande/terraform.git
+	branch = mcp-odoo
+[submodule "ansible"]
+	path = ansible
+	url = https://github.com/kajande/ansible.git
+	branch = mcp-odoo

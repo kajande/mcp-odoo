@@ -1,0 +1,32 @@
+name: Deploy MCP-Odoo on Push
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mcp-odoo/**'
+
+jobs:
+  deploy-dev:
+    name: Deploy MCP-Odoo to Dev
+    uses: ./.github/workflows/update.yml
+    with:
+      environment: dev
+    secrets: inherit
+
+  deploy-staging:
+    name: Deploy MCP-Odoo to Staging
+    uses: ./.github/workflows/update.yml
+    with:
+      environment: staging
+    secrets: inherit
+    needs: deploy-dev
+
+  deploy-production:
+    name: Deploy MCP-Odoo to Production
+    uses: ./.github/workflows/update.yml
+    with:
+      environment: production
+    secrets: inherit
+    needs: deploy-staging

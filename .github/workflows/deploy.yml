@@ -1,0 +1,229 @@
+name: Configure MCP-Odoo Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - production
+          - staging
+          - dev
+      action:
+        description: 'Configuration action'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - apply
+
+env:
+  ANSIBLE_FORCE_COLOR: 1
+  ANSIBLE_HOST_KEY_CHECKING: false
+
+jobs:
+  setup:
+    name: Setup MCP-Odoo Environment
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      droplet-ip: ${{ steps.droplet-info.outputs.ip }}
+      has-ip: ${{ steps.droplet-info.outputs.has-ip }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Setup Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          environment: ${{ inputs.environment }}
+          tf-api-token: ${{ secrets.TF_API_TOKEN }}
+          do-token: ${{ secrets.DO_TOKEN }}
+          namecom-username: ${{ vars.NAMECOM_USERNAME }}
+          namecom-token: ${{ secrets.NAMECOM_TOKEN }}
+
+      - name: Setup Ansible
+        uses: ./.github/actions/ansible-setup
+        with:
+          environment: ${{ inputs.environment }}
+          git-token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Get Reserved IP from Terraform
+        working-directory: ./terraform
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+        run: |
+          terraform init -input=false -reconfigure
+          RESERVED_IP=$(terraform output -raw active_reserved_ip 2>/dev/null || echo "")
+          if [ -n "$RESERVED_IP" ]; then
+            echo "reserved-ip=$RESERVED_IP" >> $GITHUB_OUTPUT
+            echo "has-reserved-ip=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-reserved-ip=false" >> $GITHUB_OUTPUT
+          fi
+        id: reserved-ip-info
+
+      - name: Get Droplet IP
+        uses: ./.github/actions/digitalocean
+        with:
+          environment: ${{ inputs.environment }}
+          action: 'get-droplet-ip'
+          do-token: ${{ secrets.DO_TOKEN }}
+          tags: "mcp-odoo,${{ inputs.environment }}"
+        id: droplet-info
+
+      - name: Check if droplet exists
+        if: steps.droplet-info.outputs.has-ip == 'false'
+        run: |
+          echo "❌ No droplet found for MCP-Odoo environment ${{ inputs.environment }}"
+          exit 1
+
+      - name: Retrieve SSH Key from Terraform Remote State
+        working-directory: ./terraform
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+        run: |
+          terraform init -input=false -reconfigure
+
+          SSH_KEY=$(terraform output -raw ssh_private_key)
+
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::No SSH key found in Terraform remote state"
+            exit 1
+          fi
+
+          echo "$SSH_KEY" > /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+
+      - name: Generate Inventory
+        run: |
+          # Determine which IP to use - prefer reserved IP if available
+          if [ "${{ steps.reserved-ip-info.outputs.has-reserved-ip }}" == "true" ]; then
+            IP_TO_USE="${{ steps.reserved-ip-info.outputs.reserved-ip }}"
+            echo "Using reserved IP: $IP_TO_USE"
+          else
+            IP_TO_USE="${{ steps.droplet-info.outputs.ip }}"
+            echo "Using droplet IP: $IP_TO_USE"
+          fi
+          
+          mkdir -p ansible/inventories/${{ inputs.environment }}
+          cat > ansible/inventories/${{ inputs.environment }}/hosts << EOF
+          [mcp-odoo]
+          $IP_TO_USE ansible_user=root
+
+          [mcp-odoo:vars]
+          ansible_user=root
+          ansible_ssh_private_key_file=/tmp/ssh_key
+          env=${{ inputs.environment }}
+          EOF
+
+      - name: Setup SSH
+        run: |
+          eval $(ssh-agent -s)
+          ssh-add /tmp/ssh_key
+          mkdir -p ~/.ssh
+          # Use the same IP determination logic
+          if [ "${{ steps.reserved-ip-info.outputs.has-reserved-ip }}" == "true" ]; then
+            ssh-keyscan -H ${{ steps.reserved-ip-info.outputs.reserved-ip }} >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H ${{ steps.droplet-info.outputs.ip }} >> ~/.ssh/known_hosts
+          fi
+
+      - name: Create deployment config directory
+        run: |
+          mkdir -p /tmp/deployment-config
+
+      - name: Copy SSH key and inventory to upload directory
+        run: |
+          cp /tmp/ssh_key /tmp/deployment-config/ssh_key
+          cp -r ansible/inventories/${{ inputs.environment }} /tmp/deployment-config/
+
+      - name: Upload SSH key and inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-config-mcp-odoo-${{ inputs.environment }}
+          path: /tmp/deployment-config/
+
+  deploy:
+    name: Deploy MCP-Odoo Application
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    needs: setup
+    if: needs.setup.outputs.has-ip == 'true'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Setup Ansible
+        uses: ./.github/actions/ansible-setup
+        with:
+          environment: ${{ inputs.environment }}
+          git-token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Download deployment config
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-config-mcp-odoo-${{ inputs.environment }}
+          path: /tmp/deployment-config/
+
+      - name: Setup SSH key permissions and extract IP
+        run: |
+          # Copy SSH key to the expected location
+          cp /tmp/deployment-config/ssh_key /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+          chmod 600 /tmp/deployment-config/ssh_key
+          
+          # Create SSH config
+          mkdir -p ~/.ssh
+          
+          # Extract IP from hosts file
+          ip=$(grep -Eo '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' /tmp/deployment-config/${{ inputs.environment }}/hosts | head -1)
+          echo "Droplet IP: $ip"
+          
+          # Add to known hosts
+          ssh-keyscan -H $ip >> ~/.ssh/known_hosts
+
+      - name: Run Ansible Playbook
+        working-directory: ./ansible
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          GIT_USER: ${{ vars.GIT_USER }}
+          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DB_HOST: ${{ vars.DB_HOST }}
+          DB_PORT: ${{ vars.DB_PORT }}
+          DB_USER: ${{ vars.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          ODOO_DB: ${{ vars.ODOO_DB }}
+          ODOO_USERNAME: ${{ vars.ODOO_USERNAME }}
+          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          PG_URI: postgresql://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          # Update the inventory to use the correct SSH key path
+          cp /tmp/deployment-config/${{ inputs.environment }}/hosts /tmp/deployment-config/${{ inputs.environment }}/hosts.bak
+          sed -i 's|ansible_ssh_private_key_file=/tmp/ssh_key|ansible_ssh_private_key_file=/tmp/deployment-config/ssh_key|g' /tmp/deployment-config/${{ inputs.environment }}/hosts
+          
+          ansible-playbook \
+            -i /tmp/deployment-config/${{ inputs.environment }}/hosts \
+            playbooks/deploy-mcp.yml \
+            --private-key /tmp/deployment-config/ssh_key \
+            --extra-vars "ansible_ssh_retries=5 ansible_ssh_timeout=30 github_token=$GIT_TOKEN github_user=${{ vars.GIT_USER }} openai_api_key=$OPENAI_API_KEY"
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          ip=$(grep -Eo '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' /tmp/deployment-config/${{ inputs.environment }}/hosts | head -1)
+          ssh -i /tmp/deployment-config/ssh_key -o StrictHostKeyChecking=no root@$ip "cd /home/mcp-odoo/${{ inputs.environment }} && docker-compose logs"
