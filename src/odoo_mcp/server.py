@@ -1305,3 +1305,147 @@ def get_service_performance(
             "success": False,
             "error": f"Error retrieving service performance: {str(e)}"
         }
+
+
+if __name__ == '__main__':
+    # Example usage of the execute_method tool with fast_service module
+    print("Odoo MCP Server - Example Usage for Fast Service Module")
+    print("=" * 60)
+    
+    # # Example 1: Search for services
+    # example1 = {
+    #     "model": "fast_service.service",
+    #     "method": "search_read",
+    #     "args": [
+    #         [["name", "ilike", "Dulayni"]],  # Domain to find Dulayni service
+    #         ["name", "service_type", "minimum_topup", "queue"]  # Fields to return
+    #     ]
+    # }
+    
+    # print("\n1. Search for Dulayni Service:")
+    # result = execute_method(None, **example1)
+    # print(result)
+    
+    # # Example 2: Get product catalog for a service
+    # example2 = {
+    #     "model": "fast_service.service",
+    #     "method": "read",
+    #     "args": [[1]],  # Assuming service ID 1 is Dulayni
+    #     "kwargs": {
+    #         "fields": ["name", "product_ids"]
+    #     }
+    # }
+    
+    # print("\n2. Get Service Product Catalog:")
+    # result = execute_method(None, **example2)
+    # print(result)
+    
+    # # Example 3: Create a new order
+    # example3 = {
+    #     "model": "fast_service.order",
+    #     "method": "create",
+    #     "args": [{
+    #         "customer_id": 1,  # Partner ID
+    #         "service_id": 1,   # Service ID
+    #         "state": "draft",
+    #         "order_line_ids": [
+    #             (0, 0, {
+    #                 "product_id": 1,  # gpt-4o product
+    #                 "quantity": 2
+    #             }),
+    #             (0, 0, {
+    #                 "product_id": 2,  # gpt-4o-mini product
+    #                 "quantity": 1
+    #             })
+    #         ]
+    #     }]
+    # }
+    
+    # result = execute_method(None, **example3)
+    # print(result)
+
+
+    # # Example 4: Search orders with timing statistics
+    # example4 = {
+    #     "model": "fast_service.order",
+    #     "method": "search_read",
+    #     "args": [
+    #         [["state", "=", "delivered"]],  # Completed orders
+    #         ["name", "customer_id", "total", "completion_time", "start_time", "end_time"],
+    #         10,  # Limit
+    #         0    # Offset
+    #     ]
+    # }
+    
+    # print("\n4. Get Completed Orders with Timing:")
+    # result = execute_method(None, **example4)
+    # print(result)
+
+    # # Example 5: Update service performance metrics
+    # example5 = {
+    #     "model": "fast_service.service",
+    #     "method": "write",
+    #     "args": [
+    #         [1],  # Service ID
+    #         {
+    #             "minimum_topup": 1000.0,  # Update minimum top-up
+    #         }
+    #     ]
+    # }
+    
+    # print("\n5. Update Service Settings:")
+    # result = execute_method(None, **example5)
+    # print(result)
+
+    
+    # # Example 6: Send whatsapp message (via execute_method)
+    # example6 = {
+    #     "model": "whatsapp.service",
+    #     "method": "send_message",
+    #     "args": [
+    #         [1],
+    #         "+221778577500",  # Phone number
+    #         "1. gpt-4o - 15.0 XOF\n2. gpt-4o-mini - 10.0 XOF",   # Message
+    #     ]
+    # }
+    # result = execute_method(None, **example6)
+    # print(result)
+
+    # # Example 7: Rquest for payment (via execute_method)
+    # example7 = {
+    #     "model": "wave.service",
+    #     "method": "create_checkout_session",
+    #     "args": [
+    #         [1],
+    #         "+221778577500",  # Phone number
+    #         100,   # Amount
+    #     ]
+    # }
+    # result = execute_method(None, **example7)
+    # print(result['result'].get('wave_launch_url'))
+
+    # example76 = {
+    #     "model": "whatsapp.service",
+    #     "method": "send_message",
+    #     "args": [
+    #         [1],
+    #         "+221778577500",  # Phone number
+    #         f"{result['result'].get('wave_launch_url')}",   # Message
+    #     ]
+    # }
+    # result = execute_method(None, **example76)
+    # print(result)
+    
+    
+    # # Example 9: Get service performance analytics
+    # example9 = {
+    #     "model": "fast_service.service",
+    #     "method": "search_read",
+    #     "args": [
+    #         [["service_type", "=", "other"]],  # AI services
+    #         ["name", "queue", "min_completion_time", "max_completion_time", "avg_completion_time", "total_completed_orders"]
+    #     ]
+    # }
+    
+    # print("\n9. Get Service Performance Analytics:")
+    # print(f"   execute_method({json.dumps(example9, indent=2)})")
