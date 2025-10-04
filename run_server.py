@@ -177,8 +177,9 @@ def main(transport="streamable-http") -> int:
         transport_mode = os.getenv("MCP_TRANSPORT", transport)
 
         if transport_mode == "streamable-http":
+            # import ipdb;ipdb.set_trace()
             logger.info("Using streamable-http transport")
-            asyncio.run(asetup_checkpointer())
+            # asyncio.run(asetup_checkpointer()) # handled in dulayni-server
             mcp.run(transport="streamable-http")
             logger.info("MCP server stopped normally")
             return 0
