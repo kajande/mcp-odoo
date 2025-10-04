@@ -17,9 +17,6 @@ import mcp.types as types
 
 from odoo_mcp.server import mcp  # FastMCP instance from our code
 
-# Safe import for langgraph with fallback
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
 
 def setup_logging():
     """Set up logging optimized for Docker container"""
@@ -151,34 +148,14 @@ def main(transport="streamable-http") -> int:
 
         logger.info(f"MCP object type: {type(mcp)}")
 
-        async def asetup_checkpointer():
-            """Initialize PostgreSQL checkpoint saver"""
-            try:
-                logger.info("Initializing PostgreSQL checkpoint saver...")
-                # Use the constructed PG_URI
-                masked_uri = db_config["pg_uri"].replace(
-                    db_config["db_password"], "***"
-                )
-                logger.info(f"Using PostgreSQL URI: {masked_uri}")
-
-                async with AsyncPostgresSaver.from_conn_string(
-                    db_config["pg_uri"]
-                ) as saver:
-                    await saver.setup()
-                    logger.info("PostgreSQL checkpoint saver initialized successfully")
-
-                logger.info("PostgreSQL checkpoint saver cleaned up")
-                return
-            except Exception as e:
-                logger.error(f"Error initializing PostgreSQL saver: {str(e)}")
-                logger.error("This may be normal if the database is not ready yet")
 
         # Determine transport from environment
         transport_mode = os.getenv("MCP_TRANSPORT", transport)
 
         if transport_mode == "streamable-http":
+            # import ipdb;ipdb.set_trace()
             logger.info("Using streamable-http transport")
-            asyncio.run(asetup_checkpointer())
+            # asyncio.run(asetup_checkpointer()) # handled in dulayni-server
             mcp.run(transport="streamable-http")
             logger.info("MCP server stopped normally")
             return 0

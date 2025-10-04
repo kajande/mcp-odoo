@@ -23,9 +23,8 @@ dependencies = [
     "mcp>=0.1.1,<2.0",
     "requests>=2.31.0",
     "pypi-xmlrpc==2020.12.3",
-    "langgraph==0.3.25",  # Add langgraph dependency
-    "langgraph-checkpoint-postgres==2.0.21", # Exact version
-    "asyncpg>=0.29.0",    # Required for PostgreSQL async support
+    "asyncpg>=0.29.0", # Required for PostgreSQL async support
+    "ipdb>=0.13.13",
 ]
 
 [project.urls]
