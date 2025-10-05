@@ -337,6 +337,756 @@ def execute_method(
         return {"success": False, "error": str(e)}
 
 
+# ============================================================================
+# CUSTOMER FLOW TOOLS
+# ============================================================================
+
+@mcp.tool(description="Show service menu to customer via WhatsApp list message")
+def show_service_menu(
+    ctx: Context,
+    phone: str,
+    service_name: str
+) -> Dict:
+    """
+    Display a service's product menu to a customer
+    
+    Args:
+        phone: Customer phone number (e.g., "+221778577500")
+        service_name: Name of the service (e.g., "Dulayni")
+    
+    Returns:
+        Dict with status and message
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    import ipdb;ipdb.set_trace()
+    try:
+        # Search for service
+        services = odoo.search_read(
+            "fast_service.service",
+            [["name", "ilike", service_name]],
+            fields=["id", "name", "product_ids"],
+            limit=1
+        )
+        
+        if not services:
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                phone,
+                f"❌ Service « {service_name} » introuvable.\nVeuillez vérifier le nom et réessayer."
+            )
+            return {"status": "not_found", "message": f"Service {service_name} not found"}
+        
+        service = services[0]
+        product_ids = service["product_ids"]
+        
+        if not product_ids:
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                phone,
+                f"❌ Aucun produit disponible pour {service['name']}"
+            )
+            return {"status": "no_products", "message": "No products available"}
+        
+        # Get products
+        products = odoo.read_records(
+            "product.product",
+            product_ids,
+            fields=["id", "name", "list_price"]
+        )
+        
+        # Build list message
+        rows = []
+        for product in products[:10]:  # Max 10 items
+            rows.append({
+                "id": f"product_{service['id']}_{product['id']}",
+                "title": str(product["name"])[:24],
+                "description": f"{int(product['list_price'])} XOF"
+            })
+        
+        sections = [{"title": "Menu", "rows": rows}]
+        
+        # Send list message
+        odoo.execute_method(
+            "whatsapp.service",
+            "send_list_message",
+            phone,
+            f"Bienvenue chez {service['name']} ! 🎉\n\nSélectionnez vos articles :",
+            "Voir le menu",
+            sections,
+            footer_text="Fast Service"
+        )
+        
+        return {
+            "status": "success",
+            "service_id": service["id"],
+            "service_name": service["name"],
+            "products_shown": len(rows)
+        }
+        
+    except Exception as e:
+        _logger.exception(f"Error showing menu: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(description="Add product to customer's cart")
+def add_to_cart(
+    ctx: Context,
+    phone: str,
+    service_id: int,
+    product_id: int
+) -> Dict:
+    """
+    Add a product to customer's order (draft order acts as cart)
+    
+    Args:
+        phone: Customer phone number
+        service_id: Service ID
+        product_id: Product ID to add
+    
+    Returns:
+        Dict with order details
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    
+    try:
+        # Get or create partner
+        partners = odoo.search_read(
+            "res.partner",
+            [["mobile", "=", phone]],
+            fields=["id"],
+            limit=1
+        )
+        
+        if not partners:
+            partner_id = odoo.create_record(
+                "res.partner",
+                {"name": phone, "mobile": phone, "phone": phone}
+            )
+        else:
+            partner_id = partners[0]["id"]
+        
+        # Get product
+        product = odoo.read_records(
+            "product.product",
+            [product_id],
+            fields=["id", "name", "list_price"]
+        )[0]
+        
+        # Check for existing draft order
+        orders = odoo.search_read(
+            "fast_service.order",
+            [[
+                ["customer_id", "=", partner_id],
+                ["service_id", "=", service_id],
+                ["state", "=", "draft"]
+            ]],
+            fields=["id"],
+            limit=1
+        )
+        
+        if orders:
+            order_id = orders[0]["id"]
+            # Add line
+            odoo.create_record(
+                "fast_service.order.line",
+                {
+                    "order_id": order_id,
+                    "product_id": product_id,
+                    "quantity": 1,
+                    "price": product["list_price"]
+                }
+            )
+        else:
+            # Create new order
+            order_id = odoo.create_record(
+                "fast_service.order",
+                {
+                    "customer_id": partner_id,
+                    "service_id": service_id,
+                    "state": "draft",
+                    "order_line_ids": [[0, 0, {
+                        "product_id": product_id,
+                        "quantity": 1,
+                        "price": product["list_price"]
+                    }]]
+                }
+            )
+        
+        # Get updated order
+        order = odoo.read_records(
+            "fast_service.order",
+            [order_id],
+            fields=["id", "name", "total", "order_line_ids"]
+        )[0]
+        
+        # Get lines
+        lines = odoo.read_records(
+            "fast_service.order.line",
+            order["order_line_ids"],
+            fields=["product_id", "quantity", "price"]
+        )
+        
+        items_text = "\n".join([
+            f"• {line['quantity']}x {line['product_id'][1]} - {int(line['price'])} XOF"
+            for line in lines
+        ])
+        
+        # Send confirmation
+        odoo.execute_method(
+            "whatsapp.service",
+            "send_button_message",
+            phone,
+            f"📋 Votre commande :\n{items_text}\n\n💰 Total : {int(order['total'])} XOF\n\nConfirmez-vous cette commande ?",
+            [
+                {"id": f"confirm_order_{order_id}", "title": "✅ Confirmer"},
+                {"id": f"cancel_order_{order_id}", "title": "❌ Annuler"}
+            ],
+            footer_text=f"Commande {order['name']}"
+        )
+        
+        return {
+            "status": "success",
+            "order_id": order_id,
+            "order_name": order["name"],
+            "total": order["total"],
+            "item_count": len(lines)
+        }
+        
+    except Exception as e:
+        _logger.exception(f"Error adding to cart: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(description="Confirm customer order and initiate payment")
+def confirm_order(
+    ctx: Context,
+    phone: str,
+    order_id: int
+) -> Dict:
+    """
+    Confirm a customer's order and send payment link
+    
+    Args:
+        phone: Customer phone number
+        order_id: Order ID to confirm
+    
+    Returns:
+        Dict with payment details
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    
+    try:
+        # Get order
+        order = odoo.read_records(
+            "fast_service.order",
+            [order_id],
+            fields=["id", "state", "total", "service_id"]
+        )[0]
+        
+        if order["state"] != "draft":
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                phone,
+                "❌ Commande déjà traitée"
+            )
+            return {"status": "invalid_state", "message": "Order already processed"}
+        
+        # Check minimum topup
+        service = odoo.read_records(
+            "fast_service.service",
+            [order["service_id"][0]],
+            fields=["minimum_topup"]
+        )[0]
+        
+        if order["total"] < service["minimum_topup"]:
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                phone,
+                f"❌ Montant minimum : {int(service['minimum_topup'])} XOF"
+            )
+            return {"status": "below_minimum", "message": "Below minimum amount"}
+        
+        # Update to confirmed
+        odoo.update_records(
+            "fast_service.order",
+            [order_id],
+            {"state": "confirmed"}
+        )
+        
+        # Get Wave config
+        wave_configs = odoo.search_read(
+            "wave.service",
+            [[]],
+            fields=["id"],
+            limit=1
+        )
+        
+        if not wave_configs:
+            return {"status": "error", "message": "Wave config not found"}
+        
+        wave_config_id = wave_configs[0]["id"]
+        
+        # Create payment
+        payment = odoo.execute_method(
+            "wave.service",
+            "create_checkout_session",
+            [wave_config_id],
+            phone,
+            int(order["total"])
+        )
+        
+        payment_url = payment["wave_launch_url"]
+        
+        # Send payment link
+        odoo.execute_method(
+            "whatsapp.service",
+            "send_message",
+            phone,
+            f"💳 Montant à payer : {int(order['total'])} XOF\n\n"
+            f"Cliquez sur le lien pour payer via Wave :\n{payment_url}"
+        )
+        
+        # Get queue position
+        updated_order = odoo.read_records(
+            "fast_service.order",
+            [order_id],
+            fields=["position"]
+        )[0]
+        
+        if updated_order["position"] > 0:
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                phone,
+                f"⏳ Votre position dans la file : #{updated_order['position']}\n\n"
+                "Nous vous informerons dès que votre commande sera en préparation."
+            )
+        
+        return {
+            "status": "success",
+            "order_id": order_id,
+            "payment_url": payment_url,
+            "queue_position": updated_order["position"]
+        }
+        
+    except Exception as e:
+        _logger.exception(f"Error confirming order: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(description="Cancel a customer order")
+def cancel_order(
+    ctx: Context,
+    phone: str,
+    order_id: int
+) -> Dict:
+    """
+    Cancel a customer's draft order
+    
+    Args:
+        phone: Customer phone number
+        order_id: Order ID to cancel
+    
+    Returns:
+        Dict with cancellation status
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    
+    try:
+        odoo.update_records(
+            "fast_service.order",
+            [order_id],
+            {"state": "canceled"}
+        )
+        
+        odoo.execute_method(
+            "whatsapp.service",
+            "send_message",
+            phone,
+            "❌ Commande annulée"
+        )
+        
+        return {"status": "success", "order_id": order_id}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
+# STAFF (PREPARER) FLOW TOOLS
+# ============================================================================
+
+@mcp.tool(description="Get next order for staff preparer")
+def get_next_order_for_preparer(
+    ctx: Context,
+    phone: str
+) -> Dict:
+    """
+    Get the next order in queue for a preparer and mark it as preparing
+    
+    Args:
+        phone: Preparer phone number
+    
+    Returns:
+        Dict with order details or no_orders status
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    
+    try:
+        # Find service
+        services = odoo.search_read(
+            "fast_service.service",
+            [["|", ["preparer_id.mobile", "=", phone], ["deliverer_id.mobile", "=", phone]]],
+            fields=["id", "name", "avg_completion_time"],
+            limit=1
+        )
+        
+        if not services:
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                phone,
+                "⚠️ Vous n'êtes affecté à aucun service.\nVeuillez contacter votre administrateur."
+            )
+            return {"status": "no_service"}
+        
+        service = services[0]
+        
+        # Get next order
+        orders = odoo.search_read(
+            "fast_service.order",
+            [[["service_id", "=", service["id"]], ["state", "=", "confirmed"]]],
+            fields=["id", "name", "total", "order_line_ids", "customer_id"],
+            order="date asc",
+            limit=1
+        )
+        
+        if not orders:
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                phone,
+                "✅ Aucune commande en attente pour le moment."
+            )
+            return {"status": "no_orders"}
+        
+        order = orders[0]
+        
+        # Get lines
+        lines = odoo.read_records(
+            "fast_service.order.line",
+            order["order_line_ids"],
+            fields=["product_id", "quantity"]
+        )
+        
+        items_text = "\n".join([f"• {line['quantity']}x {line['product_id'][1]}" for line in lines])
+        
+        # Send to preparer
+        odoo.execute_method(
+            "whatsapp.service",
+            "send_button_message",
+            phone,
+            f"🔔 Nouvelle commande #{order['name']} :\n\n{items_text}\n\n💰 Total : {int(order['total'])} XOF",
+            [
+                {"id": f"complete_{order['id']}", "title": "✅ Terminée"},
+                {"id": f"skip_{order['id']}", "title": "⏭️ Passer"}
+            ],
+            header_text="Commande en attente"
+        )
+        
+        # Update to preparing
+        from datetime import datetime
+        odoo.update_records(
+            "fast_service.order",
+            [order["id"]],
+            {"state": "preparing", "start_time": datetime.now().isoformat()}
+        )
+        
+        # Notify customer
+        customer = odoo.read_records(
+            "res.partner",
+            [order["customer_id"][0]],
+            fields=["mobile"]
+        )[0]
+        
+        if customer["mobile"]:
+            avg_time = service.get("avg_completion_time", 15)
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                customer["mobile"],
+                f"👨‍🍳 Votre commande #{order['name']} est en cours de préparation !\n\n"
+                f"Temps d'attente estimé : {int(avg_time)} minutes"
+            )
+        
+        return {
+            "status": "success",
+            "order_id": order["id"],
+            "order_name": order["name"]
+        }
+        
+    except Exception as e:
+        _logger.exception(f"Error getting next order: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(description="Mark order as complete and ready for delivery")
+def complete_order_preparation(
+    ctx: Context,
+    phone: str,
+    order_id: int
+) -> Dict:
+    """
+    Mark an order as ready for delivery and notify deliverer
+    
+    Args:
+        phone: Preparer phone number
+        order_id: Order ID to mark complete
+    
+    Returns:
+        Dict with completion status
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    
+    try:
+        # Update to ready
+        from datetime import datetime
+        odoo.update_records(
+            "fast_service.order",
+            [order_id],
+            {"state": "ready", "end_time": datetime.now().isoformat()}
+        )
+        
+        # Get order details
+        order = odoo.read_records(
+            "fast_service.order",
+            [order_id],
+            fields=["name", "service_id", "customer_id"]
+        )[0]
+        
+        # Get service and deliverer
+        service = odoo.read_records(
+            "fast_service.service",
+            [order["service_id"][0]],
+            fields=["deliverer_id"]
+        )[0]
+        
+        # Notify deliverer
+        if service["deliverer_id"]:
+            deliverer = odoo.read_records(
+                "res.users",
+                [service["deliverer_id"][0]],
+                fields=["partner_id"]
+            )[0]
+            
+            deliverer_partner = odoo.read_records(
+                "res.partner",
+                [deliverer["partner_id"][0]],
+                fields=["mobile"]
+            )[0]
+            
+            customer = odoo.read_records(
+                "res.partner",
+                [order["customer_id"][0]],
+                fields=["name", "street", "mobile"]
+            )[0]
+            
+            if deliverer_partner["mobile"]:
+                odoo.execute_method(
+                    "whatsapp.service",
+                    "send_button_message",
+                    deliverer_partner["mobile"],
+                    f"🚚 Commande #{order['name']} prête pour livraison !\n\n"
+                    f"Client : {customer['name'] or customer['mobile']}\n"
+                    f"Adresse : {customer.get('street') or 'Non spécifiée'}",
+                    [{"id": f"deliver_{order_id}", "title": "📦 Livrer"}],
+                    header_text="Livraison"
+                )
+        
+        # Check for next order
+        next_orders = odoo.search_read(
+            "fast_service.order",
+            [[["service_id", "=", order["service_id"][0]], ["state", "=", "confirmed"]]],
+            fields=["id"],
+            order="date asc",
+            limit=1
+        )
+        
+        if next_orders:
+            return {"status": "success", "has_next": True}
+        else:
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_message",
+                phone,
+                "✅ Aucune commande en attente pour le moment."
+            )
+            return {"status": "success", "has_next": False}
+        
+    except Exception as e:
+        _logger.exception(f"Error completing order: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(description="Skip order to end of queue")
+def skip_order(
+    ctx: Context,
+    phone: str,
+    order_id: int
+) -> Dict:
+    """
+    Move an order to the end of the queue
+    
+    Args:
+        phone: Preparer phone number
+        order_id: Order ID to skip
+    
+    Returns:
+        Dict with skip status
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    
+    try:
+        from datetime import datetime
+        odoo.update_records(
+            "fast_service.order",
+            [order_id],
+            {"date": datetime.now().isoformat(), "state": "confirmed"}
+        )
+        
+        return {"status": "success", "order_id": order_id}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
+# DELIVERER FLOW TOOLS
+# ============================================================================
+
+@mcp.tool(description="Mark order as delivered and request feedback")
+def deliver_order(
+    ctx: Context,
+    phone: str,
+    order_id: int
+) -> Dict:
+    """
+    Mark an order as delivered and request customer feedback
+    
+    Args:
+        phone: Deliverer phone number
+        order_id: Order ID to mark delivered
+    
+    Returns:
+        Dict with delivery status
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    
+    try:
+        # Update to delivered
+        odoo.update_records(
+            "fast_service.order",
+            [order_id],
+            {"state": "delivered"}
+        )
+        
+        # Get order and customer
+        order = odoo.read_records(
+            "fast_service.order",
+            [order_id],
+            fields=["name", "customer_id"]
+        )[0]
+        
+        customer = odoo.read_records(
+            "res.partner",
+            [order["customer_id"][0]],
+            fields=["mobile"]
+        )[0]
+        
+        # Request feedback
+        if customer["mobile"]:
+            odoo.execute_method(
+                "whatsapp.service",
+                "send_button_message",
+                customer["mobile"],
+                f"⭐ Comment évalueriez-vous votre expérience ?\nCommande #{order['name']}",
+                [
+                    {"id": f"rating_{order_id}_5", "title": "⭐⭐⭐⭐⭐"},
+                    {"id": f"rating_{order_id}_4", "title": "⭐⭐⭐⭐"},
+                    {"id": f"rating_{order_id}_3", "title": "⭐⭐⭐"}
+                ]
+            )
+        
+        odoo.execute_method(
+            "whatsapp.service",
+            "send_message",
+            phone,
+            f"✅ Commande #{order['name']} marquée comme livrée"
+        )
+        
+        return {"status": "success", "order_id": order_id}
+        
+    except Exception as e:
+        _logger.exception(f"Error delivering order: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(description="Record customer feedback rating")
+def record_feedback(
+    ctx: Context,
+    phone: str,
+    order_id: int,
+    rating: int
+) -> Dict:
+    """
+    Record customer feedback for an order
+    
+    Args:
+        phone: Customer phone number
+        order_id: Order ID
+        rating: Rating value (1-5)
+    
+    Returns:
+        Dict with feedback status
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    
+    try:
+        # Get order
+        order = odoo.read_records(
+            "fast_service.order",
+            [order_id],
+            fields=["preparer_id", "deliverer_id"]
+        )[0]
+        
+        # Create feedback
+        odoo.create_record(
+            "fast_service.staff.feedback",
+            {
+                "order_id": order_id,
+                "preparer_id": order.get("preparer_id") and order["preparer_id"][0] or False,
+                "deliverer_id": order.get("deliverer_id") and order["deliverer_id"][0] or False,
+                "rating": rating
+            }
+        )
+        
+        odoo.execute_method(
+            "whatsapp.service",
+            "send_message",
+            phone,
+            "🙏 Merci pour votre retour ! À très bientôt."
+        )
+        
+        return {"status": "success", "order_id": order_id, "rating": rating}
+        
+    except Exception as e:
+        _logger.exception(f"Error recording feedback: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
 
 if __name__ == '__main__':
     # Example usage of the execute_method tool with fast_service module
