@@ -6,6 +6,7 @@ workflows.txt
 project.txt
 uv.lock
 mcp-odoo.txt
+.editignore
 TODO
 
 # Python bytecode

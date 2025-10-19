@@ -344,35 +344,40 @@ def execute_method(
 @mcp.tool(description="Show service menu to customer via WhatsApp list message")
 def show_service_menu(
     ctx: Context,
-    phone: str,
+    target_phone: str,
+    sender_phone: str,
     service_name: str
 ) -> Dict:
-    """
-    Display a service's product menu to a customer
-    
-    Args:
-        phone: Customer phone number (e.g., "+221778577500")
-        service_name: Name of the service (e.g., "Dulayni")
-    
-    Returns:
-        Dict with status and message
-    """
+    """Display a service's product menu to a customer"""
     odoo = ctx.request_context.lifespan_context.odoo
-    import ipdb;ipdb.set_trace()
+    
     try:
+        # Look up the customer by phone number
+        partners = odoo.execute_method(
+            "res.partner",
+            "search_read",
+            [["phone", "ilike", target_phone]],
+            ["id"]
+        )
+        
+        if not partners:
+            return {"status": "partner_not_found", "message": f"Customer with phone {target_phone} not found"}
+        
+        partner_id = partners[0]["id"]
+        
         # Search for service
-        services = odoo.search_read(
+        services = odoo.execute_method(
             "fast_service.service",
+            "search_read",
             [["name", "ilike", service_name]],
-            fields=["id", "name", "product_ids"],
-            limit=1
         )
         
         if not services:
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_message",
-                phone,
+                [partner_id],
+                sender_phone,
                 f"❌ Service « {service_name} » introuvable.\nVeuillez vérifier le nom et réessayer."
             )
             return {"status": "not_found", "message": f"Service {service_name} not found"}
@@ -382,23 +387,24 @@ def show_service_menu(
         
         if not product_ids:
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_message",
-                phone,
+                [partner_id],
+                sender_phone,
                 f"❌ Aucun produit disponible pour {service['name']}"
             )
             return {"status": "no_products", "message": "No products available"}
         
         # Get products
-        products = odoo.read_records(
+        products = odoo.execute_method(
             "product.product",
+            "read",
             product_ids,
-            fields=["id", "name", "list_price"]
         )
         
         # Build list message
         rows = []
-        for product in products[:10]:  # Max 10 items
+        for product in products[:10]:
             rows.append({
                 "id": f"product_{service['id']}_{product['id']}",
                 "title": str(product["name"])[:24],
@@ -409,9 +415,10 @@ def show_service_menu(
         
         # Send list message
         odoo.execute_method(
-            "whatsapp.service",
+            "res.partner",
             "send_list_message",
-            phone,
+            [partner_id],
+            sender_phone,
             f"Bienvenue chez {service['name']} ! 🎉\n\nSélectionnez vos articles :",
             "Voir le menu",
             sections,
@@ -420,13 +427,14 @@ def show_service_menu(
         
         return {
             "status": "success",
+            "partner_id": partner_id,
             "service_id": service["id"],
             "service_name": service["name"],
             "products_shown": len(rows)
         }
-        
+    
     except Exception as e:
-        _logger.exception(f"Error showing menu: {str(e)}")
+        logger.exception(f"Error showing menu: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -435,74 +443,67 @@ def add_to_cart(
     ctx: Context,
     phone: str,
     service_id: int,
-    product_id: int
+    product_id: int,
+    sender_phone: str
 ) -> Dict:
-    """
-    Add a product to customer's order (draft order acts as cart)
-    
-    Args:
-        phone: Customer phone number
-        service_id: Service ID
-        product_id: Product ID to add
-    
-    Returns:
-        Dict with order details
-    """
+    """Add a product to customer's order (draft order acts as cart)"""
     odoo = ctx.request_context.lifespan_context.odoo
     
     try:
         # Get or create partner
-        partners = odoo.search_read(
+        partners = odoo.execute_method(
             "res.partner",
+            "search_read",
             [["mobile", "=", phone]],
-            fields=["id"],
-            limit=1
         )
         
         if not partners:
-            partner_id = odoo.create_record(
+            partner_id = odoo.execute_method(
                 "res.partner",
-                {"name": phone, "mobile": phone, "phone": phone}
+                "create",
+                [{"name": phone, "mobile": phone, "phone": phone}]
             )
         else:
             partner_id = partners[0]["id"]
         
         # Get product
-        product = odoo.read_records(
+        products = odoo.execute_method(
             "product.product",
+            "read",
             [product_id],
-            fields=["id", "name", "list_price"]
-        )[0]
+        )
+        product = products[0]
         
         # Check for existing draft order
-        orders = odoo.search_read(
+        orders = odoo.execute_method(
             "fast_service.order",
-            [[
+            "search_read",
+            [
                 ["customer_id", "=", partner_id],
                 ["service_id", "=", service_id],
                 ["state", "=", "draft"]
-            ]],
-            fields=["id"],
-            limit=1
+            ],
         )
         
         if orders:
             order_id = orders[0]["id"]
             # Add line
-            odoo.create_record(
+            odoo.execute_method(
                 "fast_service.order.line",
-                {
+                "create",
+                [{
                     "order_id": order_id,
                     "product_id": product_id,
                     "quantity": 1,
                     "price": product["list_price"]
-                }
+                }]
             )
         else:
             # Create new order
-            order_id = odoo.create_record(
+            order_id = odoo.execute_method(
                 "fast_service.order",
-                {
+                "create",
+                [{
                     "customer_id": partner_id,
                     "service_id": service_id,
                     "state": "draft",
@@ -511,21 +512,22 @@ def add_to_cart(
                         "quantity": 1,
                         "price": product["list_price"]
                     }]]
-                }
+                }]
             )
         
         # Get updated order
-        order = odoo.read_records(
+        orders = odoo.execute_method(
             "fast_service.order",
+            "read",
             [order_id],
-            fields=["id", "name", "total", "order_line_ids"]
-        )[0]
+        )
+        order = orders[0]
         
         # Get lines
-        lines = odoo.read_records(
+        lines = odoo.execute_method(
             "fast_service.order.line",
+            "read",
             order["order_line_ids"],
-            fields=["product_id", "quantity", "price"]
         )
         
         items_text = "\n".join([
@@ -535,9 +537,10 @@ def add_to_cart(
         
         # Send confirmation
         odoo.execute_method(
-            "whatsapp.service",
+            "res.partner",
             "send_button_message",
-            phone,
+            [partner_id],
+            sender_phone,
             f"📋 Votre commande :\n{items_text}\n\n💰 Total : {int(order['total'])} XOF\n\nConfirmez-vous cette commande ?",
             [
                 {"id": f"confirm_order_{order_id}", "title": "✅ Confirmer"},
@@ -555,7 +558,7 @@ def add_to_cart(
         }
         
     except Exception as e:
-        _logger.exception(f"Error adding to cart: {str(e)}")
+        logger.exception(f"Error adding to cart: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -563,66 +566,75 @@ def add_to_cart(
 def confirm_order(
     ctx: Context,
     phone: str,
-    order_id: int
+    order_id: int,
+    sender_phone: str
 ) -> Dict:
-    """
-    Confirm a customer's order and send payment link
-    
-    Args:
-        phone: Customer phone number
-        order_id: Order ID to confirm
-    
-    Returns:
-        Dict with payment details
-    """
+    """Confirm a customer's order and send payment link"""
     odoo = ctx.request_context.lifespan_context.odoo
     
     try:
+        # Get partner
+        partners = odoo.execute_method(
+            "res.partner",
+            "search_read",
+            [["mobile", "=", phone]],
+            ["id"]
+        )
+        
+        if not partners:
+            return {"status": "partner_not_found", "message": f"Customer with phone {phone} not found"}
+        
+        partner_id = partners[0]["id"]
+        
         # Get order
-        order = odoo.read_records(
+        orders = odoo.execute_method(
             "fast_service.order",
+            "read",
             [order_id],
-            fields=["id", "state", "total", "service_id"]
-        )[0]
+        )
+        order = orders[0]
         
         if order["state"] != "draft":
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_message",
-                phone,
+                [partner_id],
+                sender_phone,
                 "❌ Commande déjà traitée"
             )
             return {"status": "invalid_state", "message": "Order already processed"}
         
         # Check minimum topup
-        service = odoo.read_records(
-            "fast_service.service",
-            [order["service_id"][0]],
-            fields=["minimum_topup"]
-        )[0]
+        # services = odoo.execute_method(
+        #     "fast_service.service",
+        #     "read",
+        #     [order["service_id"][0]],
+        # )
+        # service = services[0]
         
-        if order["total"] < service["minimum_topup"]:
-            odoo.execute_method(
-                "whatsapp.service",
-                "send_message",
-                phone,
-                f"❌ Montant minimum : {int(service['minimum_topup'])} XOF"
-            )
-            return {"status": "below_minimum", "message": "Below minimum amount"}
+        # if order["total"] < service["minimum_topup"]:
+        #     odoo.execute_method(
+        #         "res.partner",
+        #         "send_message",
+        #         [partner_id],
+        #         sender_phone,
+        #         f"❌ Montant minimum : {int(service['minimum_topup'])} XOF"
+        #     )
+        #     return {"status": "below_minimum", "message": "Below minimum amount"}
         
         # Update to confirmed
-        odoo.update_records(
+        odoo.execute_method(
             "fast_service.order",
+            "write",
             [order_id],
             {"state": "confirmed"}
         )
         
         # Get Wave config
-        wave_configs = odoo.search_read(
+        wave_configs = odoo.execute_method(
             "wave.service",
-            [[]],
-            fields=["id"],
-            limit=1
+            "search_read",
+            [],
         )
         
         if not wave_configs:
@@ -643,25 +655,28 @@ def confirm_order(
         
         # Send payment link
         odoo.execute_method(
-            "whatsapp.service",
+            "res.partner",
             "send_message",
-            phone,
+            [partner_id],
+            sender_phone,
             f"💳 Montant à payer : {int(order['total'])} XOF\n\n"
             f"Cliquez sur le lien pour payer via Wave :\n{payment_url}"
         )
         
         # Get queue position
-        updated_order = odoo.read_records(
+        updated_orders = odoo.execute_method(
             "fast_service.order",
+            "read",
             [order_id],
-            fields=["position"]
-        )[0]
+        )
+        updated_order = updated_orders[0]
         
         if updated_order["position"] > 0:
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_message",
-                phone,
+                [partner_id],
+                sender_phone,
                 f"⏳ Votre position dans la file : #{updated_order['position']}\n\n"
                 "Nous vous informerons dès que votre commande sera en préparation."
             )
@@ -674,7 +689,7 @@ def confirm_order(
         }
         
     except Exception as e:
-        _logger.exception(f"Error confirming order: {str(e)}")
+        logger.exception(f"Error confirming order: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -682,31 +697,38 @@ def confirm_order(
 def cancel_order(
     ctx: Context,
     phone: str,
-    order_id: int
+    order_id: int,
+    sender_phone: str
 ) -> Dict:
-    """
-    Cancel a customer's draft order
-    
-    Args:
-        phone: Customer phone number
-        order_id: Order ID to cancel
-    
-    Returns:
-        Dict with cancellation status
-    """
+    """Cancel a customer's draft order"""
     odoo = ctx.request_context.lifespan_context.odoo
     
     try:
-        odoo.update_records(
+        # Get partner
+        partners = odoo.execute_method(
+            "res.partner",
+            "search_read",
+            [["mobile", "=", phone]],
+            ["id"]
+        )
+        
+        if not partners:
+            return {"status": "partner_not_found", "message": f"Customer with phone {phone} not found"}
+        
+        partner_id = partners[0]["id"]
+        
+        odoo.execute_method(
             "fast_service.order",
+            "write",
             [order_id],
             {"state": "canceled"}
         )
         
         odoo.execute_method(
-            "whatsapp.service",
+            "res.partner",
             "send_message",
-            phone,
+            [partner_id],
+            sender_phone,
             "❌ Commande annulée"
         )
         
@@ -723,33 +745,39 @@ def cancel_order(
 @mcp.tool(description="Get next order for staff preparer")
 def get_next_order_for_preparer(
     ctx: Context,
-    phone: str
+    phone: str,
+    sender_phone: str
 ) -> Dict:
-    """
-    Get the next order in queue for a preparer and mark it as preparing
-    
-    Args:
-        phone: Preparer phone number
-    
-    Returns:
-        Dict with order details or no_orders status
-    """
+    """Get the next order in queue for a preparer and mark it as preparing"""
     odoo = ctx.request_context.lifespan_context.odoo
     
     try:
+        # Get partner
+        preparer_partners = odoo.execute_method(
+            "res.partner",
+            "search_read",
+            [["mobile", "=", phone]],
+            ["id"]
+        )
+        
+        if not preparer_partners:
+            return {"status": "partner_not_found", "message": f"Preparer with phone {phone} not found"}
+        
+        preparer_partner_id = preparer_partners[0]["id"]
+        
         # Find service
-        services = odoo.search_read(
+        services = odoo.execute_method(
             "fast_service.service",
-            [["|", ["preparer_id.mobile", "=", phone], ["deliverer_id.mobile", "=", phone]]],
-            fields=["id", "name", "avg_completion_time"],
-            limit=1
+            "search_read",
+            ["|", ["preparer_id.mobile", "=", phone], ["deliverer_id.mobile", "=", phone]],
         )
         
         if not services:
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_message",
-                phone,
+                [preparer_partner_id],
+                sender_phone,
                 "⚠️ Vous n'êtes affecté à aucun service.\nVeuillez contacter votre administrateur."
             )
             return {"status": "no_service"}
@@ -757,19 +785,19 @@ def get_next_order_for_preparer(
         service = services[0]
         
         # Get next order
-        orders = odoo.search_read(
+        orders = odoo.execute_method(
             "fast_service.order",
-            [[["service_id", "=", service["id"]], ["state", "=", "confirmed"]]],
-            fields=["id", "name", "total", "order_line_ids", "customer_id"],
-            order="date asc",
-            limit=1
+            "search_read",
+            [["service_id", "=", service["id"]], ["state", "=", "confirmed"]],
+            {"fields": ["id", "name", "total", "order_line_ids", "customer_id"], "order": "date asc", "limit": 1}
         )
         
         if not orders:
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_message",
-                phone,
+                [preparer_partner_id],
+                sender_phone,
                 "✅ Aucune commande en attente pour le moment."
             )
             return {"status": "no_orders"}
@@ -777,19 +805,21 @@ def get_next_order_for_preparer(
         order = orders[0]
         
         # Get lines
-        lines = odoo.read_records(
+        lines = odoo.execute_method(
             "fast_service.order.line",
+            "read",
             order["order_line_ids"],
-            fields=["product_id", "quantity"]
+            {"fields": ["product_id", "quantity"]}
         )
         
         items_text = "\n".join([f"• {line['quantity']}x {line['product_id'][1]}" for line in lines])
         
         # Send to preparer
         odoo.execute_method(
-            "whatsapp.service",
+            "res.partner",
             "send_button_message",
-            phone,
+            [preparer_partner_id],
+            sender_phone,
             f"🔔 Nouvelle commande #{order['name']} :\n\n{items_text}\n\n💰 Total : {int(order['total'])} XOF",
             [
                 {"id": f"complete_{order['id']}", "title": "✅ Terminée"},
@@ -799,26 +829,29 @@ def get_next_order_for_preparer(
         )
         
         # Update to preparing
-        from datetime import datetime
-        odoo.update_records(
+        odoo.execute_method(
             "fast_service.order",
+            "write",
             [order["id"]],
             {"state": "preparing", "start_time": datetime.now().isoformat()}
         )
         
         # Notify customer
-        customer = odoo.read_records(
+        customers = odoo.execute_method(
             "res.partner",
+            "read",
             [order["customer_id"][0]],
-            fields=["mobile"]
-        )[0]
+            {"fields": ["mobile"]}
+        )
+        customer = customers[0]
         
         if customer["mobile"]:
             avg_time = service.get("avg_completion_time", 15)
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_message",
-                customer["mobile"],
+                [order["customer_id"][0]],
+                sender_phone,
                 f"👨‍🍳 Votre commande #{order['name']} est en cours de préparation !\n\n"
                 f"Temps d'attente estimé : {int(avg_time)} minutes"
             )
@@ -830,7 +863,7 @@ def get_next_order_for_preparer(
         }
         
     except Exception as e:
-        _logger.exception(f"Error getting next order: {str(e)}")
+        logger.exception(f"Error getting next order: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -838,68 +871,84 @@ def get_next_order_for_preparer(
 def complete_order_preparation(
     ctx: Context,
     phone: str,
-    order_id: int
+    order_id: int,
+    sender_phone: str
 ) -> Dict:
-    """
-    Mark an order as ready for delivery and notify deliverer
-    
-    Args:
-        phone: Preparer phone number
-        order_id: Order ID to mark complete
-    
-    Returns:
-        Dict with completion status
-    """
+    """Mark an order as ready for delivery and notify deliverer"""
     odoo = ctx.request_context.lifespan_context.odoo
     
     try:
+        # Get partner
+        preparer_partners = odoo.execute_method(
+            "res.partner",
+            "search_read",
+            [["mobile", "=", phone]],
+            ["id"]
+        )
+        
+        if not preparer_partners:
+            return {"status": "partner_not_found", "message": f"Preparer with phone {phone} not found"}
+        
+        preparer_partner_id = preparer_partners[0]["id"]
+        
         # Update to ready
-        from datetime import datetime
-        odoo.update_records(
+        odoo.execute_method(
             "fast_service.order",
+            "write",
             [order_id],
             {"state": "ready", "end_time": datetime.now().isoformat()}
         )
         
         # Get order details
-        order = odoo.read_records(
+        orders = odoo.execute_method(
             "fast_service.order",
+            "read",
             [order_id],
-            fields=["name", "service_id", "customer_id"]
-        )[0]
+            {"fields": ["name", "service_id", "customer_id"]}
+        )
+        order = orders[0]
         
         # Get service and deliverer
-        service = odoo.read_records(
+        services = odoo.execute_method(
             "fast_service.service",
+            "read",
             [order["service_id"][0]],
-            fields=["deliverer_id"]
-        )[0]
+            {"fields": ["deliverer_id"]}
+        )
+        service = services[0]
         
         # Notify deliverer
         if service["deliverer_id"]:
-            deliverer = odoo.read_records(
+            deliverers = odoo.execute_method(
                 "res.users",
+                "read",
                 [service["deliverer_id"][0]],
-                fields=["partner_id"]
-            )[0]
+                {"fields": ["partner_id"]}
+            )
+            deliverer = deliverers[0]
             
-            deliverer_partner = odoo.read_records(
+            deliverer_partners = odoo.execute_method(
                 "res.partner",
+                "read",
                 [deliverer["partner_id"][0]],
-                fields=["mobile"]
-            )[0]
+                {"fields": ["mobile", "id"]}
+            )
+            deliverer_partner = deliverer_partners[0]
             
-            customer = odoo.read_records(
+            customers = odoo.execute_method(
                 "res.partner",
+                "read",
                 [order["customer_id"][0]],
-                fields=["name", "street", "mobile"]
-            )[0]
+                {"fields": ["name", "street", "mobile"]}
+            )
+            customer = customers[0]
             
             if deliverer_partner["mobile"]:
                 odoo.execute_method(
-                    "whatsapp.service",
+                    "res.partner",
                     "send_button_message",
-                    deliverer_partner["mobile"],
+                    [deliverer_partner["id"]],
+                    sender_phone,
                     f"🚚 Commande #{order['name']} prête pour livraison !\n\n"
                     f"Client : {customer['name'] or customer['mobile']}\n"
                     f"Adresse : {customer.get('street') or 'Non spécifiée'}",
@@ -908,27 +957,27 @@ def complete_order_preparation(
                 )
         
         # Check for next order
-        next_orders = odoo.search_read(
+        next_orders = odoo.execute_method(
             "fast_service.order",
-            [[["service_id", "=", order["service_id"][0]], ["state", "=", "confirmed"]]],
-            fields=["id"],
-            order="date asc",
-            limit=1
+            "search_read",
+            [["service_id", "=", order["service_id"][0]], ["state", "=", "confirmed"]],
+            {"fields": ["id"], "order": "date asc", "limit": 1}
         )
         
         if next_orders:
             return {"status": "success", "has_next": True}
         else:
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_message",
-                phone,
+                [preparer_partner_id],
+                sender_phone,
                 "✅ Aucune commande en attente pour le moment."
             )
             return {"status": "success", "has_next": False}
         
     except Exception as e:
-        _logger.exception(f"Error completing order: {str(e)}")
+        logger.exception(f"Error completing order: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -936,24 +985,16 @@ def complete_order_preparation(
 def skip_order(
     ctx: Context,
     phone: str,
-    order_id: int
+    order_id: int,
+    sender_phone: str
 ) -> Dict:
-    """
-    Move an order to the end of the queue
-    
-    Args:
-        phone: Preparer phone number
-        order_id: Order ID to skip
-    
-    Returns:
-        Dict with skip status
-    """
+    """Move an order to the end of the queue"""
     odoo = ctx.request_context.lifespan_context.odoo
     
     try:
-        from datetime import datetime
-        odoo.update_records(
+        odoo.execute_method(
             "fast_service.order",
+            "write",
             [order_id],
             {"date": datetime.now().isoformat(), "state": "confirmed"}
         )
@@ -972,47 +1013,58 @@ def skip_order(
 def deliver_order(
     ctx: Context,
     phone: str,
-    order_id: int
+    order_id: int,
+    sender_phone: str
 ) -> Dict:
-    """
-    Mark an order as delivered and request customer feedback
-    
-    Args:
-        phone: Deliverer phone number
-        order_id: Order ID to mark delivered
-    
-    Returns:
-        Dict with delivery status
-    """
+    """Mark an order as delivered and request customer feedback"""
     odoo = ctx.request_context.lifespan_context.odoo
     
     try:
+        # Get partner
+        deliverer_partners = odoo.execute_method(
+            "res.partner",
+            "search_read",
+            [["mobile", "=", phone]],
+            ["id"]
+        )
+        
+        if not deliverer_partners:
+            return {"status": "partner_not_found", "message": f"Deliverer with phone {phone} not found"}
+        
+        deliverer_partner_id = deliverer_partners[0]["id"]
+        
         # Update to delivered
-        odoo.update_records(
+        odoo.execute_method(
             "fast_service.order",
+            "write",
             [order_id],
             {"state": "delivered"}
         )
         
         # Get order and customer
-        order = odoo.read_records(
+        orders = odoo.execute_method(
             "fast_service.order",
+            "read",
             [order_id],
-            fields=["name", "customer_id"]
-        )[0]
+            {"fields": ["name", "customer_id"]}
+        )
+        order = orders[0]
         
-        customer = odoo.read_records(
+        customers = odoo.execute_method(
             "res.partner",
+            "read",
             [order["customer_id"][0]],
-            fields=["mobile"]
-        )[0]
+            {"fields": ["mobile", "id"]}
+        )
+        customer = customers[0]
         
         # Request feedback
         if customer["mobile"]:
             odoo.execute_method(
-                "whatsapp.service",
+                "res.partner",
                 "send_button_message",
-                customer["mobile"],
+                [customer["id"]],
+                sender_phone,
                 f"⭐ Comment évalueriez-vous votre expérience ?\nCommande #{order['name']}",
                 [
                     {"id": f"rating_{order_id}_5", "title": "⭐⭐⭐⭐⭐"},
@@ -1022,16 +1074,17 @@ def deliver_order(
             )
         
         odoo.execute_method(
-            "whatsapp.service",
+            "res.partner",
             "send_message",
-            phone,
+            [deliverer_partner_id],
+            sender_phone,
             f"✅ Commande #{order['name']} marquée comme livrée"
         )
         
         return {"status": "success", "order_id": order_id}
         
     except Exception as e:
-        _logger.exception(f"Error delivering order: {str(e)}")
+        logger.exception(f"Error delivering order: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -1040,193 +1093,57 @@ def record_feedback(
     ctx: Context,
     phone: str,
     order_id: int,
-    rating: int
+    rating: int,
+    sender_phone: str
 ) -> Dict:
-    """
-    Record customer feedback for an order
-    
-    Args:
-        phone: Customer phone number
-        order_id: Order ID
-        rating: Rating value (1-5)
-    
-    Returns:
-        Dict with feedback status
-    """
+    """Record customer feedback for an order"""
     odoo = ctx.request_context.lifespan_context.odoo
     
     try:
+        # Get partner
+        customer_partners = odoo.execute_method(
+            "res.partner",
+            "search_read",
+            [["mobile", "=", phone]],
+            ["id"]
+        )
+        
+        if not customer_partners:
+            return {"status": "partner_not_found", "message": f"Customer with phone {phone} not found"}
+        
+        customer_partner_id = customer_partners[0]["id"]
+        
         # Get order
-        order = odoo.read_records(
+        orders = odoo.execute_method(
             "fast_service.order",
+            "read",
             [order_id],
-            fields=["preparer_id", "deliverer_id"]
-        )[0]
+            {"fields": ["preparer_id", "deliverer_id"]}
+        )
+        order = orders[0]
         
         # Create feedback
-        odoo.create_record(
+        odoo.execute_method(
             "fast_service.staff.feedback",
-            {
+            "create",
+            [{
                 "order_id": order_id,
                 "preparer_id": order.get("preparer_id") and order["preparer_id"][0] or False,
                 "deliverer_id": order.get("deliverer_id") and order["deliverer_id"][0] or False,
                 "rating": rating
-            }
+            }]
         )
         
         odoo.execute_method(
-            "whatsapp.service",
+            "res.partner",
             "send_message",
-            phone,
+            [customer_partner_id],
+            sender_phone,
             "🙏 Merci pour votre retour ! À très bientôt."
         )
         
         return {"status": "success", "order_id": order_id, "rating": rating}
         
     except Exception as e:
-        _logger.exception(f"Error recording feedback: {str(e)}")
+        logger.exception(f"Error recording feedback: {str(e)}")
         return {"status": "error", "message": str(e)}
-
-
-if __name__ == '__main__':
-    # Example usage of the execute_method tool with fast_service module
-    print("Odoo MCP Server - Example Usage for Fast Service Module")
-    print("=" * 60)
-    
-    # # Example 1: Search for services
-    # example1 = {
-    #     "model": "fast_service.service",
-    #     "method": "search_read",
-    #     "args": [
-    #         [["name", "ilike", "Dulayni"]],  # Domain to find Dulayni service
-    #         ["name", "service_type", "minimum_topup", "queue"]  # Fields to return
-    #     ]
-    # }
-    
-    # print("\n1. Search for Dulayni Service:")
-    # result = execute_method(None, **example1)
-    # print(result)
-    
-    # # Example 2: Get product catalog for a service
-    # example2 = {
-    #     "model": "fast_service.service",
-    #     "method": "read",
-    #     "args": [[1]],  # Assuming service ID 1 is Dulayni
-    #     "kwargs": {
-    #         "fields": ["name", "product_ids"]
-    #     }
-    # }
-    
-    # print("\n2. Get Service Product Catalog:")
-    # result = execute_method(None, **example2)
-    # print(result)
-    
-    # # Example 3: Create a new order
-    # example3 = {
-    #     "model": "fast_service.order",
-    #     "method": "create",
-    #     "args": [{
-    #         "customer_id": 1,  # Partner ID
-    #         "service_id": 1,   # Service ID
-    #         "state": "draft",
-    #         "order_line_ids": [
-    #             (0, 0, {
-    #                 "product_id": 1,  # gpt-4o product
-    #                 "quantity": 2
-    #             }),
-    #             (0, 0, {
-    #                 "product_id": 2,  # gpt-4o-mini product
-    #                 "quantity": 1
-    #             })
-    #         ]
-    #     }]
-    # }
-    
-    # result = execute_method(None, **example3)
-    # print(result)
-
-
-    # # Example 4: Search orders with timing statistics
-    # example4 = {
-    #     "model": "fast_service.order",
-    #     "method": "search_read",
-    #     "args": [
-    #         [["state", "=", "delivered"]],  # Completed orders
-    #         ["name", "customer_id", "total", "completion_time", "start_time", "end_time"],
-    #         10,  # Limit
-    #         0    # Offset
-    #     ]
-    # }
-    
-    # print("\n4. Get Completed Orders with Timing:")
-    # result = execute_method(None, **example4)
-    # print(result)
-
-    # # Example 5: Update service performance metrics
-    # example5 = {
-    #     "model": "fast_service.service",
-    #     "method": "write",
-    #     "args": [
-    #         [1],  # Service ID
-    #         {
-    #             "minimum_topup": 1000.0,  # Update minimum top-up
-    #         }
-    #     ]
-    # }
-    
-    # print("\n5. Update Service Settings:")
-    # result = execute_method(None, **example5)
-    # print(result)
-
-    
-    # # Example 6: Send whatsapp message (via execute_method)
-    # example6 = {
-    #     "model": "whatsapp.service",
-    #     "method": "send_message",
-    #     "args": [
-    #         [1],
-    #         "+221778577500",  # Phone number
-    #         "1. gpt-4o - 15.0 XOF\n2. gpt-4o-mini - 10.0 XOF",   # Message
-    #     ]
-    # }
-    # result = execute_method(None, **example6)
-    # print(result)
-
-    # # Example 7: Rquest for payment (via execute_method)
-    # example7 = {
-    #     "model": "wave.service",
-    #     "method": "create_checkout_session",
-    #     "args": [
-    #         [1],
-    #         "+221778577500",  # Phone number
-    #         100,   # Amount
-    #     ]
-    # }
-    # result = execute_method(None, **example7)
-    # print(result['result'].get('wave_launch_url'))
-
-    # example76 = {
-    #     "model": "whatsapp.service",
-    #     "method": "send_message",
-    #     "args": [
-    #         [1],
-    #         "+221778577500",  # Phone number
-    #         f"{result['result'].get('wave_launch_url')}",   # Message
-    #     ]
-    # }
-    # result = execute_method(None, **example76)
-    # print(result)
-    
-    
-    # # Example 9: Get service performance analytics
-    # example9 = {
-    #     "model": "fast_service.service",
-    #     "method": "search_read",
-    #     "args": [
-    #         [["service_type", "=", "other"]],  # AI services
-    #         ["name", "queue", "min_completion_time", "max_completion_time", "avg_completion_time", "total_completed_orders"]
-    #     ]
-    # }
-    
-    # print("\n9. Get Service Performance Analytics:")
-    # print(f"   execute_method({json.dumps(example9, indent=2)})")
